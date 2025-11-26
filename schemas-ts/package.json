@@ -1,0 +1,14 @@
+{
+  "name": "elk-mcp-schemas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "zod": "^3.23.8",
+    "eslint": "^8.57.0",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-plugin-import": "^2.29.1"
+  }
+}
+
