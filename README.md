@@ -11,7 +11,7 @@ All rights reserved.
 - 许可证（License）：MIT License（见 `LICENSE`）
 
 ## 简介
-elk-MCP 是日志查询与工作流集成的后端服务，支持基于 Elasticsearch 的多索引查询、字段精简、分页与国际化预留。
+elk-MCP 是日志查询与工作流集成的后端服务，支持基于 Elasticsearch 的多索引查询、字段精简、分页与国际化预留。完全兼容 ES 6.5.4.市面上的版本都是最低支持7.x
 
 ## 快速开始
 - 配置 `backend/.env`（参考 `backend/.env.example`）
