@@ -13,7 +13,7 @@ All rights reserved.
     - `filters`: `{ level?: string[], service?: string[], keyword?: string }`
     - `sort`: `{ field: "timestamp" | "_score", order: "asc" | "desc" }`
     - 动态索引选择：
-      - `index_keyword?: string` 用于按索引名关键字动态匹配（如 "kicp"）
+      - `index_keyword?: string` 用于按索引名关键字动态匹配（如 "sctv"）
       - `use_regex?: boolean` 关键字作为正则表达式处理（不区分大小写）
       - `override_indexes?: string[]` 手动指定索引列表，优先级最高
   - 出参：标准化日志列表与分页元数据。
