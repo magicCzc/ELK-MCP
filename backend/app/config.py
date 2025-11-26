@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # Index discovery configuration (can be changed at runtime via API)
     INDEX_DISCOVERY_ENABLED: bool = Field(default=True)
     INDEX_DISCOVERY_INTERVAL_SECONDS: int = Field(default=60)
-    INDEX_INCLUDE_PATTERNS: List[str] = Field(default=[r"^kst-logs-[A-Za-z0-9_-].*"])
+    INDEX_INCLUDE_PATTERNS: List[str] = Field(default=[r"^logs-[A-Za-z0-9_-].*"])
     INDEX_EXCLUDE_PATTERNS: List[str] = Field(default=[])
     # 开发调试开关（用于打印查询 DSL 与索引）
     DEBUG_QUERY_LOGS: bool = Field(default=False)

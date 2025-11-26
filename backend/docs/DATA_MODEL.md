@@ -7,8 +7,8 @@ All rights reserved.
 
 ## 索引命名建议
 
-- 统一前缀：`logs-<tenant>-<service>-<date>` 或与现网保持一致（如 `kst-logs-*`）。
-- 关键字族：例如 `kicp` 相关索引需遵循稳定命名，以支持自动匹配。
+- 统一前缀：`logs-<tenant>-<service>-<date>` 或与现网保持一致（如 `logs-*`）。
+- 关键字族：例如 `stev` 相关索引需遵循稳定命名，以支持自动匹配。
 
 ## 关键字段（建议/常见）
 

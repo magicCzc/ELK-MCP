@@ -33,7 +33,7 @@ class IndexDiscoveryService:
         self._include_patterns: List[str] = getattr(
             settings,
             "INDEX_INCLUDE_PATTERNS",
-            [r"^kst-logs-[A-Za-z0-9_-].*"],
+            [r"^logs-[A-Za-z0-9_-].*"],
         )
         self._exclude_patterns: List[str] = getattr(settings, "INDEX_EXCLUDE_PATTERNS", [])
         self._enabled: bool = getattr(settings, "INDEX_DISCOVERY_ENABLED", True)
