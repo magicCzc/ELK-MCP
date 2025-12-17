@@ -32,6 +32,8 @@ export const LogQueryRequest = z.object({
   time_range: TimeRange,
   filters: LogQueryFilters.default({}),
   sort: SortSpec.default({ field: 'timestamp', order: 'desc' }),
+  mode: z.enum(['page', 'cursor']).default('page'),
+  cursor_after: z.array(z.union([z.string(), z.number()])).optional(),
 });
 
 export const AlertRuleRef = z.object({ id: z.string().min(1), severity: z.string().optional() });

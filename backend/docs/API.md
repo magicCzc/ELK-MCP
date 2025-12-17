@@ -9,6 +9,8 @@ All rights reserved.
   - 入参（见 zod 与 Pydantic）：
     - `tenant_id` string
     - `pagination`: `{ page: number, page_size: number }`
+    - `mode`: `'page' | 'cursor'`（默认 `'page'`）
+    - `cursor_after?`: `Array<string|number>`（游标模式下，传上一页最后一条的 `sort` 值）
     - `time_range`: `{ start: string(ISO), end: string(ISO) }`
     - `filters`: `{ level?: string[], service?: string[], keyword?: string }`
     - `sort`: `{ field: "timestamp" | "_score", order: "asc" | "desc" }`
@@ -17,6 +19,51 @@ All rights reserved.
       - `use_regex?: boolean` 关键字作为正则表达式处理（不区分大小写）
       - `override_indexes?: string[]` 手动指定索引列表，优先级最高
   - 出参：标准化日志列表与分页元数据。
+    - 游标模式附加：`next_cursor_after?: Array<string|number>`，`page_size: number`
+
+### 示例：游标分页（search_after）
+
+请求（第一页，未携带游标）：
+
+```json
+{
+  "tenant_id": "sctv",
+  "pagination": { "page": 1, "page_size": 20 },
+  "mode": "cursor",
+  "time_range": { "start": "2025-11-15T00:00:00Z", "end": "2025-11-16T00:00:00Z" },
+  "filters": { "service": ["order-service"], "level": ["ERROR"] },
+  "sort": { "field": "timestamp", "order": "desc" }
+}
+```
+
+响应（节选）：
+
+```json
+{
+  "code": 0,
+  "i18n_key": "info.query.ok",
+  "data": {
+    "total": 142,
+    "items": [ /* 标准化日志 */ ],
+    "next_cursor_after": ["2025-11-15T08:43:10Z", "abc123"],
+    "page_size": 20
+  }
+}
+```
+
+第二页请求（携带上一页游标）：
+
+```json
+{
+  "tenant_id": "sctv",
+  "pagination": { "page": 1, "page_size": 20 },
+  "mode": "cursor",
+  "cursor_after": ["2025-11-15T08:43:10Z", "abc123"],
+  "time_range": { "start": "2025-11-15T00:00:00Z", "end": "2025-11-16T00:00:00Z" },
+  "filters": { "service": ["order-service"], "level": ["ERROR"] },
+  "sort": { "field": "timestamp", "order": "desc" }
+}
+```
 
 ## 告警日志检索
 
@@ -36,6 +83,66 @@ All rights reserved.
     - `time_range`
     - `group_by`: `"service" | "level" | "host"`
   - 出参：聚合桶与计数。
+
+## 分页会话管理
+
+### 初始化分页会话
+
+- `POST /api/logs/paginate/init`
+  - 功能：创建分页会话，返回分页ID和总页数，不返回实际数据
+  - 入参：与普通查询相同
+    - `tenant_id`
+    - `pagination`: `{ page: number, page_size: number }`
+    - `time_range`: `{ start: string(ISO), end: string(ISO) }`
+    - `filters`: `{ level?: string[], service?: string[], keyword?: string }`
+    - `sort`: `{ field: "timestamp" | "_score", order: "asc" | "desc" }`
+    - 动态索引选择：`index_keyword`, `use_regex`, `override_indexes`
+  - 出参：
+    ```json
+    {
+      "code": 0,
+      "i18n_key": "info.query.ok",
+      "data": {
+        "session_id": "string",
+        "total_pages": number,
+        "total_items": number,
+        "page_size": number
+      }
+    }
+    ```
+
+### 获取分页数据
+
+- `POST /api/logs/paginate/get`
+  - 功能：通过分页ID和页码获取对应页的详细数据
+  - 入参：
+    ```json
+    {
+      "session_id": "string",
+      "page": number
+    }
+    ```
+  - 出参：
+    ```json
+    {
+      "code": 0,
+      "i18n_key": "info.query.ok",
+      "data": {
+        "items": [ /* 标准化日志 */ ],
+        "current_page": number,
+        "total_pages": number
+      }
+    }
+    ```
+  - 会话过期：默认1小时过期，过期后需重新初始化
+  - 容错：页码超出范围时返回错误码
+
+### 使用场景
+
+1. **大量数据查询**：当查询结果非常大时，使用分页会话可以避免一次性加载过多数据
+2. **稳定的分页体验**：会话有效期内，查询条件保持不变，分页结果更稳定
+3. **降低ES负载**：通过会话缓存查询条件，减少重复构建ES DSL的开销
+4. **简化前端逻辑**：前端只需维护会话ID和当前页码，无需重复传递复杂查询条件
 
 ## 健康与指标
 

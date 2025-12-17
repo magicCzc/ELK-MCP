@@ -8,13 +8,18 @@ from typing import Any, Dict
 
 def normalize(hit: Dict[str, Any]) -> Dict[str, Any]:
     from ..config import settings
+    # 导入脱敏器
+    from .desensitizer import log_desensitizer
+    
     src = hit.get("_source", {})
     msg = src.get("message") or src.get("log")
     if msg is not None:
         msg = str(msg)
         if len(msg) > settings.MAX_MESSAGE_LEN:
             msg = msg[: settings.MAX_MESSAGE_LEN]
-    return {
+    
+    # 构建原始日志数据
+    raw_log = {
         "timestamp": src.get("@timestamp")
         or src.get("timestamp")
         or hit.get("sort", [None])[0],
@@ -39,3 +44,6 @@ def normalize(hit: Dict[str, Any]) -> Dict[str, Any]:
             }
         },
     }
+    
+    # 对日志数据进行脱敏处理
+    return log_desensitizer.desensitize_log(raw_log)

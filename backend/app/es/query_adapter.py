@@ -22,6 +22,8 @@ def adapt_query_to_es6(payload: dict = None, **kwargs):
     time_range = query.get("time_range") or {}
     filters = query.get("filters") or {}
     sort = query.get("sort") or {}
+    mode = str(query.get("mode") or "page")
+    cursor_after = query.get("cursor_after")
 
     page = max(1, int(pagination.get("page", 1)))
     size = max(
@@ -114,14 +116,22 @@ def adapt_query_to_es6(payload: dict = None, **kwargs):
 
     sort_field = str(sort.get("field") or settings.TIMESTAMP_FIELD)
     sort_order = str(sort.get("order") or "desc")
-    es_sort = [{sort_field: {"order": sort_order}}]
+    # Always include a stable tie-breaker to make search_after deterministic
+    es_sort = [{sort_field: {"order": sort_order}}, {"_id": {"order": "asc"}}]
 
     body: Dict[str, Any] = {
-        "from": from_,
         "size": size,
         "sort": es_sort,
         "query": {"bool": {"must": must_filters, "filter": filter_filters}},
     }
+    # Offset pagination vs cursor pagination
+    if mode == "cursor":
+        # Cursor mode: do not set "from"; optionally set search_after
+        if isinstance(cursor_after, list) and len(cursor_after) > 0:
+            body["search_after"] = cursor_after
+    else:
+        # Default: page mode
+        body["from"] = from_
     # 仅返回必要字段，降低响应体大小
     includes: List[str] = [
         settings.TIMESTAMP_FIELD,

@@ -34,6 +34,10 @@ class LogQueryRequest(BaseModel):
     time_range: TimeRange
     filters: LogQueryFilters = Field(default_factory=LogQueryFilters)
     sort: SortSpec = Field(default_factory=SortSpec)
+    # Pagination mode: default "page", optional "cursor"
+    mode: Optional[str] = Field(default="page", pattern=r"^(page|cursor)$")
+    # Cursor for search_after: pass last hit's sort values (string|number)
+    cursor_after: Optional[List[Any]] = None
     # Dynamic index selection
     index_keyword: Optional[str] = None
     use_regex: Optional[bool] = False
