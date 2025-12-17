@@ -86,3 +86,215 @@ Route: /api/indices/*
 - p95 延迟 ≤ 800 ms（接口与后端指标联合观测）。
 - 无严重缺陷：异常路径均可返回规范化 i18n 错误码；失败具备降级与重试。
 
+## 游标分页工作流示例（search_after）
+
+- 场景：深分页或大数据量遍历，避免 `from + size` 带来的性能与一致性问题。
+- 关键点：排序字段保持稳定（推荐时间字段，如 `timestamp/@timestamp`），且整个循环参数不变。
+
+### 步骤
+- 初始化：`cursor_after = null`，`page_size = 20`，`all_items = []`
+- 循环：
+  - `POST /api/logs/query`，携带 `mode = "cursor"`；若 `cursor_after` 有值则一并传入。
+  - 累加返回的 `items` 到 `all_items`。
+  - 读取 `data.next_cursor_after`，若为空则结束；否则更新 `cursor_after` 继续下一轮。
+
+### 示例请求（第一页）
+
+```json
+{
+  "tenant_id": "sctv",
+  "pagination": { "page": 1, "page_size": 20 },
+  "mode": "cursor",
+  "time_range": { "start": "2025-11-15T00:00:00Z", "end": "2025-11-16T00:00:00Z" },
+  "filters": { "service": ["order-service"], "level": ["ERROR"] },
+  "sort": { "field": "timestamp", "order": "desc" }
+}
+```
+
+### 示例响应（节选）
+
+```json
+{
+  "code": 0,
+  "i18n_key": "info.query.ok",
+  "data": {
+    "total": 142,
+    "items": [ /* 标准化日志 */ ],
+    "next_cursor_after": ["2025-11-15T08:43:10Z", "abc123"],
+    "page_size": 20
+  }
+}
+```
+
+### 第二页请求（携带上一页的游标）
+
+```json
+{
+  "tenant_id": "sctv",
+  "pagination": { "page": 1, "page_size": 20 },
+  "mode": "cursor",
+  "cursor_after": ["2025-11-15T08:43:10Z", "abc123"],
+  "time_range": { "start": "2025-11-15T00:00:00Z", "end": "2025-11-16T00:00:00Z" },
+  "filters": { "service": ["order-service"], "level": ["ERROR"] },
+  "sort": { "field": "timestamp", "order": "desc" }
+}
+```
+
+### 注意事项
+- 排序字段：后端始终加入 `"_id"` 作为第二排序键，保证游标稳定性；建议主排序用时间字段。
+- 参数一致性：游标分页仅支持“向后遍历”，循环中应保持 `tenant_id/time_range/filters/sort/page_size` 不变。
+- 响应体大小：仍受 `MAX_PAGE_SIZE` 与字段精简控制，避免超过 1MB 限制。
+
+### 伪码（JavaScript/TypeScript）
+
+```ts
+let cursorAfter: (string | number)[] | null = null;
+const pageSize = 20;
+const allItems: any[] = [];
+
+while (true) {
+  const req = {
+    tenant_id: "sctv",
+    pagination: { page: 1, page_size: pageSize },
+    mode: "cursor",
+    time_range: { start: "2025-11-15T00:00:00Z", end: "2025-11-16T00:00:00Z" },
+    filters: { service: ["order-service"], level: ["ERROR"] },
+    sort: { field: "timestamp", order: "desc" },
+    ...(cursorAfter ? { cursor_after: cursorAfter } : {}),
+  };
+
+  const resp = await httpPost("/api/logs/query", req);
+  if (resp.code !== 0) throw new Error(resp.i18n_key);
+
+  allItems.push(...resp.data.items);
+  const next = resp.data.next_cursor_after;
+  if (!next || next.length === 0) break;
+  cursorAfter = next;
+}
+
+// allItems 即为完整结果集（可按需分批处理或写入存储）
+```
+
+## 分页会话管理工作流示例
+
+- 场景：需要稳定的分页体验，或前端需要简化逻辑，只维护会话ID和当前页码。
+- 关键点：会话有效期内，查询条件保持不变，分页结果更稳定。
+
+### 步骤
+1. 初始化分页会话，获取总页数和会话ID
+2. 循环获取每页数据，直到获取完所有页数
+3. 根据需要清理会话（可选）
+
+### 示例请求 1：初始化分页会话
+
+```json
+{
+  "tenant_id": "sctv",
+  "pagination": { "page": 1, "page_size": 20 },
+  "time_range": { "start": "2025-11-15T00:00:00Z", "end": "2025-11-16T00:00:00Z" },
+  "filters": { "service": ["order-service"], "level": ["ERROR"] },
+  "sort": { "field": "timestamp", "order": "desc" }
+}
+```
+
+### 示例响应 1：分页会话初始化成功
+
+```json
+{
+  "code": 0,
+  "i18n_key": "info.query.ok",
+  "data": {
+    "session_id": "uuid-1234-5678-90ab-cdef",
+    "total_pages": 8,
+    "total_items": 142,
+    "page_size": 20
+  }
+}
+```
+
+### 示例请求 2：获取第一页数据
+
+```json
+{
+  "session_id": "uuid-1234-5678-90ab-cdef",
+  "page": 1
+}
+```
+
+### 示例响应 2：第一页数据
+
+```json
+{
+  "code": 0,
+  "i18n_key": "info.query.ok",
+  "data": {
+    "items": [ /* 标准化日志 */ ],
+    "current_page": 1,
+    "total_pages": 8
+  }
+}
+```
+
+### 示例请求 3：获取第二页数据
+
+```json
+{
+  "session_id": "uuid-1234-5678-90ab-cdef",
+  "page": 2
+}
+```
+
+### 注意事项
+- 会话有效期：默认1小时过期，过期后需重新初始化
+- 页码范围：页码必须在1到总页数之间，否则返回错误
+- 查询条件：会话有效期内，查询条件保持不变，无法修改
+- 会话清理：过期会话会自动清理，无需手动处理
+
+### 伪码（JavaScript/TypeScript）
+
+```ts
+// 初始化分页会话
+const initReq = {
+  tenant_id: "sctv",
+  pagination: { page: 1, page_size: 20 },
+  time_range: { start: "2025-11-15T00:00:00Z", end: "2025-11-16T00:00:00Z" },
+  filters: { service: ["order-service"], level: ["ERROR"] },
+  sort: { field: "timestamp", order: "desc" }
+};
+
+const initResp = await httpPost("/api/logs/paginate/init", initReq);
+if (initResp.code !== 0) throw new Error(initResp.i18n_key);
+
+const { session_id, total_pages } = initResp.data;
+const allItems: any[] = [];
+
+// 循环获取所有页数据
+for (let page = 1; page <= total_pages; page++) {
+  const pageReq = {
+    session_id,
+    page
+  };
+
+  const pageResp = await httpPost("/api/logs/paginate/get", pageReq);
+  if (pageResp.code !== 0) throw new Error(pageResp.i18n_key);
+
+  allItems.push(...pageResp.data.items);
+}
+
+// allItems 即为完整结果集
+```
+
+## 分页方式选择建议
+
+| 分页方式 | 适用场景 | 优点 | 缺点 |
+|---------|---------|------|------|
+| 普通分页（page） | 小数据量，需要跳转到任意页码 | 简单易用，支持任意页码跳转 | 大数据量时性能下降，深分页可能不准确 |
+| 游标分页（cursor） | 大数据量，只需要顺序遍历 | 性能好，结果准确，支持深分页 | 不支持跳转到任意页码，只支持向后遍历 |
+| 分页会话管理 | 需要稳定的分页体验，前端逻辑简化 | 会话有效期内结果稳定，前端逻辑简单 | 会话有有效期，需要额外的初始化步骤 |
+
+### 选择建议
+1. 对于数据量较小（<1000条）的查询，推荐使用普通分页
+2. 对于数据量较大（>1000条）的查询，推荐使用游标分页或分页会话管理
+3. 如果前端需要简化逻辑，只维护会话ID和当前页码，推荐使用分页会话管理
+4. 如果需要稳定的分页体验，会话有效期内结果不变，推荐使用分页会话管理
+

@@ -12,6 +12,9 @@ class I18NKeys:
     ERROR_RBAC_DENY = "error.rbac.denied"
     ERROR_ES_CONNECTION = "error.es.connection"
     ERROR_BAD_INPUT = "error.input.bad"
+    ERROR_INVALID_PARAM = "error.input.invalid_param"
+    ERROR_SESSION_EXPIRED = "error.pagination.session_expired"
+    ERROR_INVALID_PAGE = "error.pagination.invalid_page"
     ERROR_INTERNAL = "error.internal"
     ERROR_INDICES_BAD_CONFIG = "error.indices.bad_config"
 
