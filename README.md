@@ -9,7 +9,7 @@ All rights reserved.
 - 发布时间（Release Date）：2025-03-03
 - 联系方式（Contact）：910445306@qq.com
 - 许可证（License）：MIT License（见 `LICENSE`）
-- 最新版本（Latest Version）：1.0.0
+- 最新版本（Latest Version）：1.2.0
 
 ## 简介
 elk-MCP 是日志查询与工作流集成的后端服务，支持基于 Elasticsearch 的多索引查询、字段精简、分页与国际化预留。完全兼容 ES 6.5.4，解决了市面上大多数日志服务最低支持 7.x 的痛点。
