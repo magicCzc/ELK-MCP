@@ -43,6 +43,7 @@ export const AlertsQueryRequest = z.object({
   time_range: TimeRange,
   severity: z.array(z.enum(['low', 'medium', 'high'])).optional(),
   rules: z.array(AlertRuleRef).optional(),
+  query: z.string().optional(),
 });
 
 export const StatsRequest = z.object({

@@ -42,7 +42,11 @@ def query_logs(payload: LogQueryRequest, ctx=Depends(authz)):
         time_range=payload.time_range.model_dump(),
         filters=payload.filters.model_dump(),
         sort=payload.sort.model_dump(),
+        query_string=payload.query_string,
     )
+    # Debug: print indices and DSL when DEBUG_QUERY_LOGS is enabled
+    _dbg = bool(getattr(settings, "DEBUG_QUERY_LOGS", False))
+    
     # Dynamic target indices
     target_indexes = (
         payload.override_indexes
@@ -54,12 +58,24 @@ def query_logs(payload: LogQueryRequest, ctx=Depends(authz)):
                 fuzzy=True,
             )
             if payload.index_keyword is not None
-            else settings.LOG_INDEXES
+            else None  # 不默认查询所有索引，必须明确指定
         )
     )
-
-    # Debug: print indices and DSL when DEBUG_QUERY_LOGS is enabled
-    _dbg = bool(getattr(settings, "DEBUG_QUERY_LOGS", False))
+    
+    # 安全检查：必须指定明确的索引，禁止查询所有索引
+    if not target_indexes or len(target_indexes) == 0:
+        return {
+            "code": ErrorCode.INVALID_PARAM,
+            "i18n_key": I18NKeys.ERROR_INVALID_PARAM,
+            "data": {"message": "必须指定明确的索引或提供有效的 index_keyword"},
+        }
+    
+    # 安全检查：限制索引数量，防止查询过多索引
+    MAX_INDICES_LIMIT = 10  # 单次查询最多10个索引
+    if len(target_indexes) > MAX_INDICES_LIMIT:
+        if _dbg:
+            print(f"[WARN][query] Too many indices ({len(target_indexes)}), limiting to {MAX_INDICES_LIMIT}")
+        target_indexes = target_indexes[:MAX_INDICES_LIMIT]
     if _dbg:
         try:
             indices_dbg = target_indexes or settings.LOG_INDEXES
@@ -76,27 +92,45 @@ def query_logs(payload: LogQueryRequest, ctx=Depends(authz)):
 
     es_t0 = perf_counter()
     try:
-        # Degrade if too many indices
-        indices = target_indexes or settings.LOG_INDEXES
-        if len(indices) > 200:
-            indices = indices[:200]
+        # 索引数量已经在前面检查过，这里直接使用
+        indices = target_indexes
         if len(settings.ES_HOSTS) > 1:
             res = multi_es_client.search_logs_all(
-                index=indices, body=body, doc_type=(settings.LOG_DOC_TYPE or None)
+                index=indices,
+                body=body,
+                doc_type=(settings.LOG_DOC_TYPE or None),
+                keyword=payload.index_keyword,
             )
         else:
             res = es_client.search_logs(index=indices, body=body, doc_type=(settings.LOG_DOC_TYPE or None))
-    except httpx.HTTPError:
+    except httpx.HTTPError as e:
+        # Debug: print error details when DEBUG_QUERY_LOGS is enabled
+        if _dbg:
+            try:
+                print("[ERROR][query] HTTPError:", str(e))
+                if hasattr(e, 'response'):
+                    print("[ERROR][query] status:", e.response.status_code if hasattr(e.response, 'status_code') else 'N/A')
+                    print("[ERROR][query] body:", (e.response.text[:500] if hasattr(e.response, 'text') else 'N/A'))
+            except Exception:
+                pass
         # Fallback: try with fewer indices if possible
         try:
             indices = (target_indexes or settings.LOG_INDEXES)[:50]
             if len(settings.ES_HOSTS) > 1:
                 res = multi_es_client.search_logs_all(
-                    index=indices, body=body, doc_type=(settings.LOG_DOC_TYPE or None)
+                    index=indices,
+                    body=body,
+                    doc_type=(settings.LOG_DOC_TYPE or None),
+                    keyword=payload.index_keyword,
                 )
             else:
                 res = es_client.search_logs(index=indices, body=body, doc_type=(settings.LOG_DOC_TYPE or None))
-        except httpx.HTTPError:
+        except httpx.HTTPError as e2:
+            if _dbg:
+                try:
+                    print("[ERROR][query] Fallback HTTPError:", str(e2))
+                except Exception:
+                    pass
             return {
                 "code": ErrorCode.ES_CONNECTION,
                 "i18n_key": I18NKeys.ERROR_ES_CONNECTION,
@@ -149,23 +183,50 @@ def alerts(payload: AlertsQueryRequest, ctx=Depends(authz)):
     if not rbac.allow(token=token, tenant_id=tenant_id, action="alerts"):
         return {"code": ErrorCode.RBAC_DENIED, "i18n_key": I18NKeys.ERROR_RBAC_DENY, "data": {}}
 
+    # 安全检查：必须指定索引
+    if not payload.index_keyword and not payload.override_indexes:
+        return {
+            "code": ErrorCode.INVALID_PARAM,
+            "i18n_key": I18NKeys.ERROR_INVALID_PARAM,
+            "data": {"message": "必须指定明确的索引 (index_keyword 或 override_indexes)"},
+        }
+
     REQUESTS_TOTAL.labels(endpoint="alerts").inc()
     body = adapt_query_to_es6(
         tenant_id=payload.tenant_id,
         pagination={"page": 1, "page_size": 100},
         time_range=payload.time_range.model_dump(),
-        filters={},
+        filters={"keyword": payload.query} if payload.query else {},
         sort={"field": settings.TIMESTAMP_FIELD, "order": "desc"},
     )
+    
+    # 获取目标索引
+    target_indexes = (
+        payload.override_indexes
+        if payload.override_indexes
+        else index_discovery.find_indices(
+            keyword=(payload.index_keyword or ""),
+            fuzzy=True,
+        )
+    )
+    
+    # 安全检查：限制索引数量
+    MAX_INDICES_LIMIT = 10
+    if len(target_indexes) > MAX_INDICES_LIMIT:
+        target_indexes = target_indexes[:MAX_INDICES_LIMIT]
+    
     es_t0 = perf_counter()
     try:
         if len(settings.ES_HOSTS) > 1:
             res = multi_es_client.search_logs_all(
-                index=settings.LOG_INDEXES, body=body, doc_type=(settings.LOG_DOC_TYPE or None)
+                index=target_indexes,
+                body=body,
+                doc_type=(settings.LOG_DOC_TYPE or None),
+                keyword=payload.index_keyword,
             )
         else:
             res = es_client.search_logs(
-                index=settings.LOG_INDEXES, body=body, doc_type=(settings.LOG_DOC_TYPE or None)
+                index=target_indexes, body=body, doc_type=(settings.LOG_DOC_TYPE or None)
             )
     except httpx.HTTPError:
         return {"code": ErrorCode.ES_CONNECTION, "i18n_key": I18NKeys.ERROR_ES_CONNECTION, "data": {}}
@@ -183,6 +244,14 @@ def stats(payload: StatsRequest, ctx=Depends(authz)):
     if not rbac.allow(token=token, tenant_id=tenant_id, action="stats"):
         return {"code": ErrorCode.RBAC_DENIED, "i18n_key": I18NKeys.ERROR_RBAC_DENY, "data": {}}
 
+    # 安全检查：必须指定索引
+    if not payload.index_keyword and not payload.override_indexes:
+        return {
+            "code": ErrorCode.INVALID_PARAM,
+            "i18n_key": I18NKeys.ERROR_INVALID_PARAM,
+            "data": {"message": "必须指定明确的索引 (index_keyword 或 override_indexes)"},
+        }
+
     REQUESTS_TOTAL.labels(endpoint="stats").inc()
     base = adapt_query_to_es6(
         tenant_id=payload.tenant_id,
@@ -192,8 +261,35 @@ def stats(payload: StatsRequest, ctx=Depends(authz)):
         sort={"field": "timestamp", "order": "desc"},
     )
     base.update(build_aggregation_es6(field=payload.group_by))
+    
+    # 获取目标索引
+    target_indexes = (
+        payload.override_indexes
+        if payload.override_indexes
+        else index_discovery.find_indices(
+            keyword=(payload.index_keyword or ""),
+            fuzzy=True,
+        )
+    )
+    
+    # 安全检查：限制索引数量
+    MAX_INDICES_LIMIT = 10
+    if len(target_indexes) > MAX_INDICES_LIMIT:
+        target_indexes = target_indexes[:MAX_INDICES_LIMIT]
+    
     try:
-        res = es_client.search_logs(index=settings.LOG_INDEXES, body=base, doc_type=(settings.LOG_DOC_TYPE or None))
+        # Determine target host for stats if keyword is provided
+        client_to_use = es_client
+        if len(settings.ES_HOSTS) > 1 and payload.index_keyword:
+            route_host = settings.get_project_route(payload.index_keyword)
+            if route_host:
+                matching = [c for c in multi_es_client.clients if route_host in c._base_url]
+                if matching:
+                    client_to_use = matching[0]
+
+        res = client_to_use.search_logs(
+            index=target_indexes, body=base, doc_type=(settings.LOG_DOC_TYPE or None)
+        )
     except httpx.HTTPError:
         return {"code": ErrorCode.ES_CONNECTION, "i18n_key": I18NKeys.ERROR_ES_CONNECTION, "data": {}}
     buckets = res.get("aggregations", {}).get("group_stats", {}).get("buckets", [])
@@ -226,6 +322,14 @@ def init_pagination(payload: LogQueryRequest, ctx=Depends(authz)):
 
     REQUESTS_TOTAL.labels(endpoint="paginate_init").inc()
     
+    # 安全检查：必须指定索引
+    if not payload.index_keyword and not payload.override_indexes:
+        return {
+            "code": ErrorCode.INVALID_PARAM,
+            "i18n_key": I18NKeys.ERROR_INVALID_PARAM,
+            "data": {"message": "必须指定明确的索引 (index_keyword 或 override_indexes)"},
+        }
+    
     # 构建查询参数，设置page_size=0仅获取总数
     query_params = {
         "tenant_id": payload.tenant_id,
@@ -236,7 +340,8 @@ def init_pagination(payload: LogQueryRequest, ctx=Depends(authz)):
         "mode": "page",  # 分页模式固定为page
         "index_keyword": payload.index_keyword,
         "use_regex": payload.use_regex,
-        "override_indexes": payload.override_indexes
+        "override_indexes": payload.override_indexes,
+        "query_string": payload.query_string,
     }
     
     # 构建ES查询DSL，仅获取总数
@@ -247,26 +352,28 @@ def init_pagination(payload: LogQueryRequest, ctx=Depends(authz)):
     target_indexes = (
         payload.override_indexes
         if payload.override_indexes
-        else (
-            index_discovery.find_indices(
-                keyword=(payload.index_keyword or ""),
-                use_regex=bool(payload.use_regex),
-                fuzzy=True,
-            )
-            if payload.index_keyword is not None
-            else settings.LOG_INDEXES
+        else index_discovery.find_indices(
+            keyword=(payload.index_keyword or ""),
+            use_regex=bool(payload.use_regex),
+            fuzzy=True,
         )
     )
     
+    # 安全检查：限制索引数量
+    MAX_INDICES_LIMIT = 10
+    if len(target_indexes) > MAX_INDICES_LIMIT:
+        target_indexes = target_indexes[:MAX_INDICES_LIMIT]
+    
     # 执行ES查询，仅获取总数
     try:
-        indices = target_indexes or settings.LOG_INDEXES
-        if len(indices) > 200:
-            indices = indices[:200]
+        indices = target_indexes
         
         if len(settings.ES_HOSTS) > 1:
             res = multi_es_client.search_logs_all(
-                index=indices, body=body, doc_type=(settings.LOG_DOC_TYPE or None)
+                index=indices,
+                body=body,
+                doc_type=(settings.LOG_DOC_TYPE or None),
+                keyword=payload.index_keyword,
             )
         else:
             res = es_client.search_logs(index=indices, body=body, doc_type=(settings.LOG_DOC_TYPE or None))
@@ -345,31 +452,48 @@ def get_paginated_data(payload: dict, ctx=Depends(authz)):
     if not session.is_valid_page(page):
         return {"code": ErrorCode.INVALID_PAGE, "i18n_key": I18NKeys.ERROR_INVALID_PAGE, "data": {}}
     
-    # 获取目标索引
-    index_keyword = session.query_params.get("index_keyword")
-    use_regex = session.query_params.get("use_regex", False)
-    override_indexes = session.query_params.get("override_indexes")
+    # 从会话中获取索引相关参数
+    session_override_indexes = session.query_params.get("override_indexes")
+    session_index_keyword = session.query_params.get("index_keyword")
+    session_use_regex = session.query_params.get("use_regex", False)
     
+    # 安全检查：会话中必须包含索引信息
+    if not session_index_keyword and not session_override_indexes:
+        return {
+            "code": ErrorCode.INVALID_PARAM,
+            "i18n_key": I18NKeys.ERROR_INVALID_PARAM,
+            "data": {"message": "会话中缺少索引信息，请重新初始化分页会话"},
+        }
+    
+    # 获取目标索引（与普通查询保持一致的逻辑）
     target_indexes = (
-        override_indexes
-        if override_indexes
-        else (
-            index_discovery.find_indices(
-                keyword=(index_keyword or ""),
-                use_regex=bool(use_regex),
-                fuzzy=True,
-            )
-            if index_keyword is not None
-            else settings.LOG_INDEXES
+        session_override_indexes
+        if session_override_indexes
+        else index_discovery.find_indices(
+            keyword=(session_index_keyword or ""),
+            use_regex=bool(session_use_regex),
+            fuzzy=True,
         )
     )
     
-    # 构建查询参数，更新页码
-    query_params = session.query_params.copy()
-    query_params["pagination"]["page"] = page
+    # 安全检查：限制索引数量
+    MAX_INDICES_LIMIT = 10
+    if len(target_indexes) > MAX_INDICES_LIMIT:
+        target_indexes = target_indexes[:MAX_INDICES_LIMIT]
     
-    # 构建ES查询DSL
-    body = adapt_query_to_es6(**query_params)
+    # 构建ES查询DSL，与普通查询保持一致的参数传递方式
+    pagination = session.query_params["pagination"].copy()
+    pagination["page"] = page
+    
+    body = adapt_query_to_es6(
+        tenant_id=session.query_params["tenant_id"],
+        pagination=pagination,
+        time_range=session.query_params["time_range"],
+        filters=session.query_params["filters"],
+        sort=session.query_params["sort"],
+        mode=session.query_params["mode"],
+        query_string=session.query_params.get("query_string")
+    )
     
     # 执行ES查询
     try:
@@ -379,7 +503,10 @@ def get_paginated_data(payload: dict, ctx=Depends(authz)):
         
         if len(settings.ES_HOSTS) > 1:
             res = multi_es_client.search_logs_all(
-                index=indices, body=body, doc_type=(settings.LOG_DOC_TYPE or None)
+                index=indices,
+                body=body,
+                doc_type=(settings.LOG_DOC_TYPE or None),
+                keyword=session_index_keyword,
             )
         else:
             res = es_client.search_logs(index=indices, body=body, doc_type=(settings.LOG_DOC_TYPE or None))

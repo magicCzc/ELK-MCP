@@ -21,6 +21,12 @@ class LogQueryFilters(BaseModel):
     level: Optional[List[str]] = None
     service: Optional[List[str]] = None
     keyword: Optional[str] = None
+    # 模糊匹配配置（可选，向后兼容）
+    fuzzy_type: Optional[str] = Field(
+        default="contains",
+        pattern=r"^(contains|prefix|fuzzy|wildcard|regexp)$"
+    )
+    fuzzy_options: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 
 class SortSpec(BaseModel):
@@ -29,7 +35,9 @@ class SortSpec(BaseModel):
 
 
 class LogQueryRequest(BaseModel):
-    tenant_id: str
+    # tenant_id: 租户ID，默认 "all" 表示查询所有租户（跳过 tenant 过滤）
+    # 适用于数据中没有 tenant_id 字段的场景
+    tenant_id: str = Field(default="all")
     pagination: Pagination
     time_range: TimeRange
     filters: LogQueryFilters = Field(default_factory=LogQueryFilters)
@@ -42,6 +50,13 @@ class LogQueryRequest(BaseModel):
     index_keyword: Optional[str] = None
     use_regex: Optional[bool] = False
     override_indexes: Optional[List[str]] = None
+    # Lucene query string syntax support (optional, backward compatible)
+    # Examples:
+    #   - "service:order-service AND level:ERROR"
+    #   - "message:exception AND NOT message:timeout"
+    #   - "status_code:[400 TO 599]"
+    #   - "response_time:>1000"
+    query_string: Optional[str] = None
 
 
 class AlertRuleRef(BaseModel):
@@ -50,16 +65,25 @@ class AlertRuleRef(BaseModel):
 
 
 class AlertsQueryRequest(BaseModel):
-    tenant_id: str
+    # tenant_id: 租户ID，默认 "all" 表示查询所有租户（跳过 tenant 过滤）
+    tenant_id: str = Field(default="all")
     time_range: TimeRange
     severity: Optional[List[str]] = None
     rules: Optional[List[AlertRuleRef]] = None
+    query: Optional[str] = None
+    # 索引选择（必需）
+    index_keyword: Optional[str] = None
+    override_indexes: Optional[List[str]] = None
 
 
 class StatsRequest(BaseModel):
-    tenant_id: str
+    # tenant_id: 租户ID，默认 "all" 表示查询所有租户（跳过 tenant 过滤）
+    tenant_id: str = Field(default="all")
     time_range: TimeRange
     group_by: str = Field(..., pattern=r"^(service|level|host)$")
+    # 索引选择（必需）
+    index_keyword: Optional[str] = None
+    override_indexes: Optional[List[str]] = None
 
 
 class StandardLog(BaseModel):
