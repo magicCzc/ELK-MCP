@@ -29,7 +29,7 @@ class IndexDiscoveryService:
 
     def __init__(self) -> None:
         self._clients: List[ESHttpClient] = [ESHttpClient(h) for h in settings.ES_HOSTS]
-        self._interval_seconds: int = getattr(settings, "INDEX_DISCOVERY_INTERVAL_SECONDS", 60)
+        self._interval_seconds: int = getattr(settings, "INDEX_DISCOVERY_INTERVAL_SECONDS", 300)
         self._include_patterns: List[str] = getattr(
             settings,
             "INDEX_INCLUDE_PATTERNS",

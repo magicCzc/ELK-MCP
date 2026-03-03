@@ -15,7 +15,10 @@ All rights reserved.
 elk-MCP 是日志查询与工作流集成的后端服务，支持基于 Elasticsearch 的多索引查询、字段精简、分页与国际化预留。完全兼容 ES 6.5.4，解决了市面上大多数日志服务最低支持 7.x 的痛点。
 
 ## 关键特性
+- **多集群精准路由**：支持基于 `.env` 配置的项目与集群映射，可根据 `index_keyword` 或 `override_indexes` 自动将请求定向到特定 ES 节点，大幅提升多集群环境下的查询效率。
 - **ES 6.5.4 兼容性**：兼容 Elasticsearch 6.5.4 查询 DSL，提供 ES6 语法适配器。
+- **模糊匹配查询**：支持多种模糊匹配类型（contains、prefix、fuzzy、wildcard、regexp），满足不同的日志搜索需求。
+- **Lucene Query String 支持**：支持完整的 Lucene 查询语法，包括字段过滤、布尔逻辑、范围查询、通配符等。
 - **响应优化**：精简 `_source` 字段返回，避免超长响应导致调用失败；对超长 `message` 进行截断（默认 `MAX_MESSAGE_LEN=4096`）。
 - **多种分页方式**：
   - 普通分页（支持任意页码跳转）
@@ -26,6 +29,12 @@ elk-MCP 是日志查询与工作流集成的后端服务，支持基于 Elastics
 - **告警与统计功能**：支持告警日志检索、统计分析（按服务、级别、主机分组）。
 - **多租户与权限控制**：基于 RBAC 的权限控制，支持多租户隔离；文案采用 i18n key（国际化预留）。
 - **监控与指标**：暴露 Prometheus 指标，支持请求计数、延迟监控、索引刷新与匹配等指标。
+- **查询安全防护**：
+  - 强制指定索引：禁止查询所有索引，必须提供 `index_keyword` 或 `override_indexes`
+  - 索引数量限制：单次查询最多 10 个索引
+  - 前导通配符禁止：自动移除前导通配符，防止全表扫描
+  - 并发控制：多集群查询最多 3 个并发线程
+  - 连接池限制：防止连接耗尽
 - **严格安全与性能约束**：不硬编码敏感信息，冷启动 ≤ 2s，单次推理接口 p95 ≤ 800ms。
 
 ## 快速开始
@@ -58,8 +67,11 @@ elk-MCP 是日志查询与工作流集成的后端服务，支持基于 Elastics
   - 请求体关键字段：
     - 时间范围：`time_range`（包含 `start` 和 `end`）
     - 过滤条件：`level`, `service`, `keyword`
+    - 模糊匹配：`fuzzy_type`（contains/prefix/fuzzy/wildcard/regexp）、`fuzzy_options`
+    - Lucene 查询：`query_string`（支持完整 Lucene 语法）
     - 分页：`pagination`（包含 `page` 和 `page_size`）
     - 分页模式：`mode`（可选 `page` 或 `cursor`）
+    - **索引选择（必需）**：`index_keyword` 或 `override_indexes`
   - 响应字段：
     - `total`：匹配总数
     - `items`：日志数组，包含标准化的日志字段
@@ -67,15 +79,45 @@ elk-MCP 是日志查询与工作流集成的后端服务，支持基于 Elastics
 
 - `POST /api/logs/alerts`：告警日志检索
   - 支持按严重级别和规则过滤
+  - **必需参数**：`index_keyword` 或 `override_indexes`
 
 - `POST /api/logs/stats`：统计分析
   - 支持按服务、级别、主机分组
+  - **必需参数**：`index_keyword` 或 `override_indexes`
 
 - `POST /api/logs/paginate/init`：初始化分页会话
   - 返回会话ID和总页数
+  - **必需参数**：`index_keyword` 或 `override_indexes`
 
 - `POST /api/logs/paginate/get`：获取分页数据
   - 通过会话ID和页码获取数据
+
+### 模糊匹配查询示例
+```json
+{
+  "tenant_id": "sctv",
+  "pagination": { "page": 1, "page_size": 20 },
+  "time_range": { "start": "2025-11-15T00:00:00Z", "end": "2025-11-16T00:00:00Z" },
+  "filters": {
+    "keyword": "exception",
+    "fuzzy_type": "wildcard"
+  },
+  "index_keyword": "order",
+  "override_indexes": ["kst-logs-order-service-2025.11.15"]
+}
+```
+
+### Lucene Query String 示例
+```json
+{
+  "tenant_id": "sctv",
+  "pagination": { "page": 1, "page_size": 20 },
+  "time_range": { "start": "2025-11-15T00:00:00Z", "end": "2025-11-16T00:00:00Z" },
+  "query_string": "service:order-service AND level:ERROR",
+  "index_keyword": "order",
+  "override_indexes": ["kst-logs-order-service-2025.11.15"]
+}
+```
 
 ### 索引管理相关
 - `GET /api/indices/list`：获取索引列表
@@ -103,31 +145,77 @@ elk-MCP 是日志查询与工作流集成的后端服务，支持基于 Elastics
 - 所有用户输入进行二次校验（后端 `Pydantic`，前端 `zod` 预留）。
 - 许可证选择避免 GPL/LGPL 依赖；新增库需说明理由与包大小估算。
 
-## 目录结构（节选）
-- `backend/`：后端应用代码
-  - `app/`：
-    - `alerts/`：告警引擎，用于评估告警规则
-    - `es/`：ES 查询适配器、DSL 构造
-    - `indexes/`：索引自动发现服务
-    - `logs/`：日志归一化与字段截断
-    - `metrics/`：Prometheus 指标暴露
-    - `models/`：Pydantic 模型与校验
-    - `routes/`：HTTP 路由与接口
-      - `health.py`：健康检查接口
-      - `indices.py`：索引管理接口
-      - `logs.py`：日志查询接口
-    - `security/`：认证与权限控制
-    - `tenancy/`：多租户中间件
-    - `utils/`：工具函数
-      - `i18n.py`：国际化支持
-      - `pagination_session.py`：分页会话管理
-    - `config.py`：配置管理
-    - `main.py`：应用入口
-  - `docs/`：API、部署、架构与运维文档
-  - `tests/`：测试文件
-- `schemas-ts/`：TypeScript 侧的 schema（Airbnb ESLint 规范）
+## 目录结构
+
+```
+elk-MCP/
+├── backend/                    # 后端应用代码
+│   ├── app/                    # 主应用目录
+│   │   ├── alerts/             # 告警引擎
+│   │   │   └── engine.py       # 告警规则评估
+│   │   ├── es/                 # Elasticsearch 相关
+│   │   │   ├── client.py       # ES HTTP 客户端（连接池、并发控制）
+│   │   │   └── query_adapter.py # 查询 DSL 构造（模糊匹配、Lucene Query String）
+│   │   ├── indexes/            # 索引管理
+│   │   │   └── service.py      # 索引自动发现服务
+│   │   ├── logs/               # 日志处理
+│   │   │   ├── desensitizer.py # 脱敏处理
+│   │   │   └── normalizer.py   # 日志归一化
+│   │   ├── metrics/            # 监控指标
+│   │   │   └── metrics.py      # Prometheus 指标暴露
+│   │   ├── models/             # 数据模型
+│   │   │   └── schemas.py      # Pydantic 模型定义
+│   │   ├── routes/             # API 路由
+│   │   │   ├── health.py       # 健康检查
+│   │   │   ├── indices.py      # 索引管理接口
+│   │   │   └── logs.py         # 日志查询接口（query/alerts/stats/paginate）
+│   │   ├── security/           # 安全认证
+│   │   │   └── auth.py         # RBAC 权限控制
+│   │   ├── tenancy/            # 多租户
+│   │   │   └── middleware.py   # 租户中间件
+│   │   ├── utils/              # 工具函数
+│   │   │   ├── error_codes.py  # 错误码定义
+│   │   │   ├── i18n.py         # 国际化
+│   │   │   ├── pagination_session.py  # 分页会话管理（Redis）
+│   │   │   └── redis_process.py       # Redis 进程管理
+│   │   ├── config.py           # 配置管理
+│   │   └── main.py             # FastAPI 应用入口
+│   ├── docs/                   # 文档
+│   │   ├── API.md              # API 接口文档
+│   │   ├── ARCHITECTURE.md     # 架构设计文档
+│   │   ├── BENCHMARK.md        # 性能测试文档
+│   │   ├── DATA_MODEL.md       # 数据模型文档
+│   │   ├── DEPLOYMENT.md       # 部署文档
+│   │   └── OPERATIONS.md       # 运维手册
+│   ├── tests/                  # 测试文件
+│   │   ├── test_fuzzy_query.py # 模糊匹配测试
+│   │   ├── test_pagination.py  # 分页功能测试
+│   │   ├── test_query_string.py # Lucene Query String 测试
+│   │   └── test_routes.py      # 路由测试
+│   ├── .env.example            # 环境变量模板
+│   ├── README.md               # 后端说明文档
+│   └── requirements.txt        # Python 依赖
+├── schemas-ts/                 # TypeScript Schema（可选）
+│   └── src/
+│       └── schemas.ts
+├── .gitignore                  # Git 忽略配置
+├── LICENSE                     # 许可证
+└── README.md                   # 项目主文档
+```
 
 ## 版本更新记录
+
+### 1.2.0 (2026-03-03)
+- **新增模糊匹配查询**：支持 contains、prefix、fuzzy、wildcard、regexp 五种匹配类型
+- **新增 Lucene Query String 支持**：完整支持 Lucene 查询语法
+- **新增查询安全防护**：
+  - 强制指定索引，禁止查询所有索引
+  - 限制单次查询最多 10 个索引
+  - 禁止前导通配符，防止全表扫描
+  - 限制并发线程数（最多 3 个）
+  - 连接池限制（10 连接/5 保活）
+- **更新所有接口**：alerts、stats、paginate 接口添加索引安全检查
+- **完善文档**：更新 API 文档和 README，添加安全规范说明
 
 ### 1.1.0 (2025-12-17)
 - 新增分页会话管理功能
@@ -147,6 +235,8 @@ elk-MCP 是日志查询与工作流集成的后端服务，支持基于 Elastics
 - 响应过大：减小 `page_size`，保持字段精简，开启消息截断。
 - ES 版本差异：本项目针对 ES 6.5.4 做适配，更新 ES 版本时需复核 DSL。
 - 索引列表为空：检查 ES 权限是否允许 `/_cat/indices`；适当放宽 `include_patterns`。
+- **错误码 3002（INVALID_PARAM）**：未指定索引，必须提供 `index_keyword` 或 `override_indexes`。
+- **错误码 2001（ES_CONNECTION）**：ES 连接失败或查询超时，检查 ES 主机配置和网络连接。
 
 ## 贡献与联系
 - 提交 PR 前请确保不包含私密配置（例如 `backend/.env`）。

@@ -29,10 +29,11 @@ class ESHttpClient:
             if settings.ES_USERNAME and settings.ES_PASSWORD:
                 auth = httpx.BasicAuth(settings.ES_USERNAME, settings.ES_PASSWORD)
             self._client = httpx.Client(
-                timeout=5.0,
+                timeout=30.0,  # 增加超时到30秒，避免频繁超时重试
                 auth=auth,
                 verify=settings.ES_VERIFY_SSL,
                 headers={"Content-Type": "application/json"},
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),  # 限制连接数
             )
         return self._client
 
@@ -145,21 +146,42 @@ class MultiESClient:
         index: List[str],
         body: Dict[str, Any],
         doc_type: Optional[str] = None,
+        keyword: Optional[str] = None,
     ) -> Dict[str, Any]:
         results: List[Dict[str, Any]] = []
-        # 调试输出：并发请求的所有目标主机
+        # Precision Routing Logic
         from ..config import settings as _settings
+        target_clients = self.clients
+        
+        # 1. Try keyword from request
+        # 2. If no keyword, try to extract from the first index in the list
+        route_key = keyword
+        if not route_key and index and isinstance(index, list) and len(index) > 0:
+            route_key = index[0]
+
+        if route_key:
+            route_host = _settings.get_project_route(route_key)
+            if route_host:
+                # Find the client that matches the route_host (ip or full url)
+                matching = [c for c in self.clients if route_host in c._base_url]
+                if matching:
+                    target_clients = matching
+                    if bool(getattr(_settings, "DEBUG_QUERY_LOGS", False)):
+                        print(f"[DEBUG][es] precision routing via '{route_key}' -> {route_host}")
+
+        # 调试输出：并发请求的所有目标主机
         if bool(getattr(_settings, "DEBUG_QUERY_LOGS", False)):
             try:
-                print("[DEBUG][es] fan-out to hosts =", [c._base_url for c in self.clients])
+                print("[DEBUG][es] target hosts =", [c._base_url for c in target_clients])
                 print("[DEBUG][es] indices =", index)
             except Exception:
                 pass
-        # Run requests concurrently; limit workers to number of clusters.
-        with ThreadPoolExecutor(max_workers=len(self.clients)) as pool:
+        # 安全检查：限制并发数，防止过多并发请求压垮ES集群
+        max_workers = min(len(target_clients), 3)  # 最多3个并发线程
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
                 pool.submit(c.search_logs, index=index, body=body, doc_type=doc_type): c
-                for c in self.clients
+                for c in target_clients
             }
             for fut in as_completed(futures):
                 try:

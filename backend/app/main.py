@@ -12,6 +12,7 @@ from .routes.health import router as health_router
 from .routes.indices import router as indices_router
 from .metrics.metrics import metrics_app
 from .indexes.service import index_discovery
+from .utils.redis_process import redis_manager
 
 
 def create_app() -> FastAPI:
@@ -35,11 +36,15 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def _startup():
+        # Start private Redis instance
+        redis_manager.start()
         index_discovery.startup()
 
     @app.on_event("shutdown")
     def _shutdown():
         index_discovery.shutdown()
+        # Stop private Redis instance
+        redis_manager.stop()
 
     return app
 
