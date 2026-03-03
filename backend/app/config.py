@@ -42,13 +42,11 @@ class Settings(BaseSettings):
 
     # 开发调试开关（用于打印查询 DSL 与索引）
     DEBUG_QUERY_LOGS: bool = Field(default=False)
-    # 响应体控制：分页上限与消息最大长度（避免 Dify 1MB 限制）
-    MAX_PAGE_SIZE: int = Field(default=20, ge=1, le=200)
+    # 响应体控制：分页上限与消息最大长度（避免 Dify 1MB 限制�?    MAX_PAGE_SIZE: int = Field(default=20, ge=1, le=200)
     MAX_MESSAGE_LEN: int = Field(default=4096, ge=256, le=65536)
     
     # 租户过滤配置
-    # 如果设置为 True，当请求中 tenant_id 为空或 "all" 时，会自动使用 X-Tenant-Id header 的值
-    # 如果设置为 False，当 tenant_id 为 "all" 时，会跳过 tenant 过滤（适用于数据中没有 tenant_id 字段的场景）
+    # 如果设置�?True，当请求�?tenant_id 为空�?"all" 时，会自动使�?X-Tenant-Id header 的�?    # 如果设置�?False，当 tenant_id �?"all" 时，会跳�?tenant 过滤（适用于数据中没有 tenant_id 字段的场景）
     TENANT_FILTER_STRICT: bool = Field(default=False)
 
     class Config:
@@ -83,7 +81,7 @@ class Settings(BaseSettings):
                 return host
                 
         # 2. If no match, try reverse: see if any project name is part of the keyword
-        # (Useful when keyword is a full index name like 'kst-logs-center-2026.01.04')
+        # (Useful when keyword is a full index name like 'logs-center-2026.01.04')
         for host, projects in mapping.items():
             for p in projects:
                 if p.upper() in k:
